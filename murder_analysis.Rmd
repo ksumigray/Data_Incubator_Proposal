@@ -1,0 +1,241 @@
+---
+title: "Analysis of the rise in unsolved murders in the US"
+output: html_document
+---
+## Kaelyn Sumigray
+
+###Summary
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning=FALSE, message=FALSE)
+```
+In this analysis, I have utilized data from the Murder Accountability Project, which is a dataset of murders from 1976 to 2015 that was compiled from FBI files and unreported murders. Data can be downloaded at http://www.murderdata.org/p/data-docs.html
+
+```{r, load_packages}
+library(dplyr)
+library(ggplot2)
+library(reshape2)
+```
+
+
+
+```{r, load_dataset, cache=TRUE}
+murder <- read.csv("./SHR1976_2015.csv")
+```
+
+I am interested in why the murder solve rate has decreased over the years. First, let's make sure that it really has decreased and that a larger percentage of murders have gone unsolved.
+
+```{r, cast_by_year}
+solved_by_year <- dcast(murder, Year ~ Solved)
+#add new column of percentage unsolved
+solved_by_year$Percent_unsolved <- (solved_by_year$No/(solved_by_year$Yes + solved_by_year$No))*100
+
+#Make plot of percent unsolved over the years
+g <- ggplot(solved_by_year, aes(Year, Percent_unsolved)) + geom_col(col='black', fill='salmon', lwd=0.5) + labs(title="Percentage of unsolved murders nationwide")
+g
+```
+
+So, compared to the late 1970s and early 1980s, the percentage has gone up. There of course seem to be some fluctations, though. Now, I want to see if we break it down by state, is there a state that really seems to be having the most trouble solving murders. And if so, can we look at some factors that might be contributing to that?
+
+```{r, create_dataframe_by_state_and_year, fig.height=6, fig.width=10}
+state <- murder$State
+year <- murder$Year
+solved <- murder$Solved
+new_frame <- data.frame(state, year, solved)
+dplyr_test <- group_by(new_frame, state)
+yesnofac <- factor(dplyr_test$solved, levels=c("Yes", "No"))
+#relevel(yesnofac, ref='Yes')
+dplyr_test$Solved_numeric <- as.numeric(yesnofac)
+dplyr_Test2 <- data.frame(dplyr_test$state, dplyr_test$year, dplyr_test$Solved_numeric)
+
+names(dplyr_Test2) <- c("state", 'year', 'solved_numeric')
+df_melt <- melt(dplyr_Test2, id=c("state", 'year'))
+casted_df <- dcast(df_melt, state+year ~ value, sum)
+#head(casted_df)
+names(casted_df) <- c('state', 'year', 'solved', 'unsolved')
+#Because the value of unsolved was 2, we need to divide by 2 for it to actually be a count.
+casted_df$unsolved <- casted_df$unsolved/2
+casted_df$Total_murders <- casted_df$solved + casted_df$unsolved
+casted_df$Percent_unsolved <- (casted_df$unsolved/casted_df$Total_murders)*100
+
+g <- ggplot(casted_df, aes(year, Percent_unsolved))
+g + geom_col() + facet_wrap(~state, nrow=10, ncol=6) + geom_smooth(method='lm')
+
+```
+
+Now, this is busy, but what you should focus on are the trend lines. Immediately, we can see some states  have decreased their percentage of unsolved, some that have stayed relatively similar, and of course, the ones whose unsolved rate actually increased. 
+Let's look at those closer.
+
+```{r, decreased_and_increased_states}
+selected_states <- casted_df[casted_df$state %in% c("Illinois", 'New Jersey', 'Connecticut', 'California', 'Mississippi', 'Hawaii', 'New Hampshire', 'New Mexico', 'Oregon', 'District of Columbia'),]
+g <- ggplot(selected_states, aes(year, Percent_unsolved))
+g + geom_col() + facet_wrap(~state, nrow=2, ncol=5) + geom_smooth(method='lm')
+```
+
+So here, I just pulled out five states whose unsolved rate goes up (Not good!), four states whose unsolved rate goes down (great!), and DC, which seems to have a strangely high unsolved rate, but it has dropped compared to the 1990s. 
+Because the rate of unsolved murders seems to increase so dramatically in Illinois, I specifically want to look more closely at Illinois.
+```{r, illinois}
+illinois <- murder[murder$State == "Illinois",]
+```
+
+So, over the past 40ish years, there have been over 31,000 murders in Illinois. Now, has the rate of unsolved murders simply gone up because the state is dealing with an increasing number of murders? Let's look at murders by year and their unsolved rate.
+
+```{r, illinois_by_year}
+illinois_by_year <- dcast(illinois, Year ~ Solved)
+illinois_by_year$total <- illinois_by_year$No + illinois_by_year$Yes
+illinois_by_year$percent_unsolved <- (illinois_by_year$No/illinois_by_year$total)*100
+g <- ggplot(illinois_by_year, aes(Year, total, fill=percent_unsolved))+ geom_col()
+g
+```
+
+Interestingly, the total number of murders per year has actually decreased, quite dramatically, but the percentage of unsolved murders has dramatically increased. Let's see if we can find any potential reasons why. 
+```{r, illinois_county}
+illinois_county <- dcast(illinois, Year+CNTYFIPS ~ Solved)
+illinois_county$total <- illinois_county$No + illinois_county$Yes
+illinois_county$percent <- (illinois_county$No/illinois_county$total)*100
+illinois_county_sub <- subset(illinois_county, !(percent <= 0))
+
+
+illinois_county_top <- subset(illinois_county_sub, total > 5)
+summary(illinois_county_top$total)
+g <- ggplot(illinois_county_top, aes(x=Year, y=percent))
+g <- g + scale_size(range=c(2,20), guide='none')
+g <- g + geom_point(color='grey50', aes(size=total/100, show_guide=FALSE))
+g <- g + geom_point(aes(color=CNTYFIPS, size=total/100))
+g
+```
+
+So, what this graph shows is that of the counties with the most murders (at least 6 a year), Cook county and Winnebago county have high unsolved rates. The size of the circles represents the total number of murders per year, so you can also see that the absolute number of murders in Illinois largely occur in Cook county. Not surprisingly, Cook County is where Chicago is. If we look more closesly at Cook county, we can see which law enforcement agency has the highets rate of unsolved murders. While there has been a fairly steady increase in the unsolved rate in Cook County since the 90s, I am going to focus on the last 15 years. 
+
+```{r, cook_county}
+cook_county <- subset(illinois, CNTYFIPS == "Cook, IL")
+cook_county_recent <- subset(cook_county, Year >= 2000)
+
+```
+So over the past 15 years, there have been 8342 murders in Cook County.
+```{r, cook_agency}
+cook_agency <- dcast(cook_county_recent, Agency ~ Solved)
+cook_agency$total <- cook_agency$No + cook_agency$Yes
+
+```
+
+Of the 8342 murders in Cook County, 8305 have occurred in Chicago. There are of course many factors that could be contributing to the high unsolved rate in Chicago. One I want to focus on is the circumstances behind the murders and if we see an increase in total murders by circumstance, and if they correlate to the unsolved rates. 
+ 
+ 
+```{r, chicago}
+chicago <- subset(cook_county_recent, Agency == "Chicago") 
+chicago_year <- dcast(chicago, Year ~ Solved)
+chicago_year$Total <- chicago_year$No + chicago_year$Yes
+chicago_year$percent <- (chicago_year$No/chicago_year$Total)*100
+g <- ggplot(chicago_year, aes(x=Year, y=Total, fill=percent)) + geom_col() + labs(title="Murders in Chicago 2000-2015")
+g
+```
+
+Somewhat surprisingly, the actual number of murders that occur each year was higher in the early 2000's compared to the last 10 years. But, you can see by the color coding that while the number of murders has decreased, the unsolved rate has increased (meaning a fewer percentage of cases are actually solved). 
+
+```{r, chicago_percent_total}
+
+g <- ggplot(chicago_year, aes(x=Total, y=percent))
+g <- g + xlab("Total Annual Murders")
+g <- g + ylab("Percent unsolved")
+g <- g + geom_point(size=6, color='black', alpha=0.2)
+g <- g + geom_point(size=5, color='blue', alpha=0.5)
+g <- g + geom_smooth(method='lm', color='black')
+g <- g + labs(title="Total number of murders vs. Unsolved Rate in Chicago")
+g
+```
+
+So, this graph roughly shows that as the total number of murders increased, the percentage of solved murders goes down. The correlation (slope) of the line is `r cor(chicago_year$Total, chicago_year$percent)`.
+Does this mean that the absolute number of solved cases is steady? Maybe they're just at their max work load for their staff size.
+```{r, chicago_solved}
+g <- ggplot(chicago_year, aes(x=Year, y=Yes, fill=percent)) + geom_col() + labs(title="Number of solved cases per year")
+g
+```
+
+No, the total number of solved cases has indeed gone down. So, we need to look more deeply into the circumstances behind these murders. Perhaps the department could reappropriate their staff if we can find a certain situation that is going unsolved at higher than normal rates.
+
+```{r, chicago_circumstance, echo=FALSE, fig.width=10}
+chicago_circ <- dcast(chicago, Year+Circumstance ~ Solved)
+chicago_circ$Total <- chicago_circ$No + chicago_circ$Yes
+chicago_circ$Percent <- (chicago_circ$No/chicago_circ$Total)*100
+chicago_circ_sub <- subset(chicago_circ, Percent > 0)
+g <- ggplot(chicago_circ_sub, aes(x=Year, y=Percent))
+g <- g + scale_size(range=c(2,10), guide="none")
+g <- g + geom_point(color='grey50', aes(size=Total/10, show_guide=FALSE))
+g <- g + geom_point(aes(color=Circumstance, size=Total/10))
+g
+```
+
+
+In the above plot, the percentage of murders that are unsolved each year are on the y-axis. The size of the point corresponds to the total number of murders for each circumstance, and the colors represent the different possible circumstances. Not surprisingly, the "Circumstances undetermined" category has near 100% unsolved rate - had it been solved, the circumstances would have been determined, too. Let's look more closely at some of the circumstances where we can see an increasing trend. So, based on the color coding, that looks like it would be, Juvenile gang killings, Narcotic drug laws, Robbery, and Other. We are going to exclude Other, because it's vague and doesn't tell us anything. 
+```{r, circumstance_analysis}
+
+increasing_circ <- subset(chicago_circ_sub, Circumstance %in% c("Juvenile gang killings", "Narcotic drug laws", "Robbery"))
+g <- ggplot(increasing_circ, aes(x=Year, y=Total))
+g <- g + geom_point(aes(color=Percent, size=2)) + geom_smooth(method='lm', color='black') + facet_wrap(~Circumstance)
+g
+```
+
+So, you can see here that while all three of these showed increases in the percentage of unsolved cases, Narcotic drug law- and robbery- associated murders actually slightly decreased from 2000 to 2015. In sharp contrast, the total number of Juvenile gang killings has dramatically increased, and with it, so has the percentage of unsolved juvenile gang-related murders. 
+
+The analysis performed above shows us how we can look at the statistics on murders in the US over time and start to study why the unsolved rate is increasing (i.e., why the solved rate is decreasing). As an example, I further investigated the unsolved murder rates in Chicago, and identified one circumstance in which both total numbers and percent unsolved of murders has dramatically increased over the past 15 years. These data can now allow local and government entities to examine whether they need to reallocate funds or sources to address the source of all these murders - juvenile gang killings. 
+
+```{r}
+library(gridExtra)
+chicago_juv <- chicago_circ_sub[chicago_circ_sub$Circumstance == 'Juvenile gang killings',]
+all_juv <- murder[murder$Circumstance == 'Juvenile gang killings',]
+juv_by_year <- dcast(all_juv, Year ~ Solved)
+juv_By_year_sub <- juv_by_year[juv_by_year$Year >= 2000,]
+juv_By_year_sub$Total <- juv_By_year_sub$No + juv_By_year_sub$Yes
+juv_By_year_sub$Percent <- (juv_By_year_sub$No/juv_By_year_sub$Total)*100
+
+juv_By_year_sub$Region <- c("Nationwide")
+chicago_juv$Region <- c("Chicago")
+drops <- c("Circumstance")
+chicago_juv <- chicago_juv[, !(names(chicago_juv) %in% drops)]
+all_juv <- rbind(chicago_juv, juv_By_year_sub)
+
+plot1 <- ggplot(all_juv, aes(y=Total, x=Year, color=Region)) + geom_point() + geom_smooth(method='lm', fill=NA)
+plot2 <- ggplot(all_juv, aes(y=Percent, x=Year, color=Region)) + geom_point() + geom_smooth(method='lm', fill=NA)
+grid.arrange(plot1, plot2, ncol=1)
+
+
+chicago_percent_y <- chicago_juv$Percent
+chicago_years_x <- chicago_juv$Year
+chicago_total_y <- chicago_juv$Total
+chicago_percent_fit <- lm(chicago_percent_y ~ chicago_years_x)
+chicago_total_fit <- lm(chicago_total_y ~ chicago_years_x)
+
+nation_percent_y <- all_juv$Percent
+nation_years_x <- all_juv$Year
+nation_total_y <- all_juv$Total
+nation_percent_fit <- lm(nation_percent_y ~ nation_years_x)
+nation_total_fit <- lm(nation_total_y ~ nation_years_x)
+```
+So, while nationwide, the total number of juvenile gang killings is going down by approximately 4.3 murders a year, the total number of juvenile gang killings in Chicago is going up by approximately 8.5 per year. 
+
+When we look at the percentage that remain unsolved, both nationwide and in Chicago, the percentage of unsolved juvenile gang murders is increasing. But, the rate at which the percentage is increasing in Chicago is higher than that of the rest of the nation. Nationwide, the percentage is increasing by approximately 1.78% per year, while the percent unsolved in Chicago is increasing by approximately 2.16% per year. Why is Chicago not keeping pace with the rest of the country in solving juvenile gang killing cases? 
+
+I want to look at all crime in Chicago over the past 15 years.
+```{r, chicago_crimes}
+crimes <- read.csv("./Crimes_-_2001_to_present.csv")
+crimes$count <- 1
+crime_cast <- dcast(crimes, Year ~ count)
+names(crime_cast) <- c("Year", "Total")
+g <- ggplot(crime_cast, aes(x=Year, y=Total))
+g <- g + geom_col()
+g
+```
+
+Shockingly, the total amount of crime has actually dramatically decreased over the past 17 years. So, why are juvenile gang killings going unsolved so frequently? Let's look at the types of crimes being committed.
+
+```{r, crime_types, fig.width=11}
+crime_type_cast <- dcast(crimes, Year + Primary.Type ~ count)
+names(crime_type_cast) <- c("Year", "Primary_Type", "Total")
+g <- ggplot(crime_type_cast, aes(x=Year, y=Total, fill=Primary_Type))
+g <- g + geom_col()
+g
+```
+
+So, the increase in juvenile gang killings and the cases remaining unsolved is not due to a global decrease in crime, which could lead to the police force being "stretched too thin". Illinois has been in financial crisis now for several years. I next plan on looking at whether the budget of the Chicago police department has been cut, causing shortages of resources and/or personnel.
+
+
